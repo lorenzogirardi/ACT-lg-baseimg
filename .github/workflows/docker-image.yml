@@ -11,11 +11,11 @@ on:
 
 jobs:
 
-  build:
+  baseimg:
 
     runs-on: ubuntu-latest
-
-    baseimg:
+    
+    steps:
       - name: Checkout code
         uses: actions/checkout@v3
       - name: Set up Docker Buildx
@@ -43,7 +43,11 @@ jobs:
           run: docker push lgirardi/lg-baseimg:edge
       - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
-    flaskimg:
+
+  flaskimg:
+    needs: baseimg  
+    runs-on: ubuntu-latest  
+    steps:
       - name: Checkout code
         uses: actions/checkout@v3
       - name: Set up Docker Buildx
