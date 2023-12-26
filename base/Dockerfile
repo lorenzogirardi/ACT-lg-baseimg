@@ -1,4 +1,4 @@
-FROM debian:stable-slim
+FROM debian:bookworm-slim
 
 LABEL author="k8s.it <l@k8s.it>"
 LABEL layer=base
