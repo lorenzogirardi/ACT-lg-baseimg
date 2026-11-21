@@ -1,0 +1,17 @@
+# Single source of truth for every pinned version in this repository.
+# Nothing else may write a version: Dockerfiles take these as build args, CI reads them through
+# scripts/versions.py. A version changes only by a pull request (Renovate opens it, the agent
+# pipeline reviews it): patch bumps weekly, minor/major only after approval on the dependency dashboard.
+# The `# renovate:` comment above each line tells Renovate where to look the version up.
+
+# renovate: datasource=docker depName=debian versioning=regex:^trixie-(?<major>\d{8})-slim$
+debian: trixie-20261104-slim
+
+# renovate: datasource=docker depName=python versioning=docker
+python: 3.15.2
+
+# renovate: datasource=docker depName=node versioning=node
+node: 24.22.3
+
+# renovate: datasource=docker depName=golang versioning=docker
+go: 1.27.4

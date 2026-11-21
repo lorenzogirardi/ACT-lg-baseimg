@@ -1,0 +1,39 @@
+name: Agent Main Guard
+run-name: "Agent Main Guard · ${{ github.event_name }} · ${{ github.event.workflow_run.display_title || github.event.pull_request.title || github.ref_name }}"
+
+# The safety net after the merge. If the pipeline on main FAILS after a merge,
+# the commit that plausibly caused it is reverted automatically and an issue
+# labelled `agent` is opened so the pipeline redoes the change knowing why it
+# broke. No revert when the failed jobs are not ones a code change causes
+# (scanners, SBOM), when main was already red before, when the commit is itself
+# a revert, or when the circuit breaker is open (3 automatic reverts in 24h also
+# stops automatic merging). A failure is first re-run once (failed jobs only), so a
+# flaky job never causes a revert. Design: docs/13-agent-pipeline.md.
+
+on:
+  workflow_run:
+    workflows: ["Images"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  guard:
+    if: >-
+      vars.AI_ENABLED == 'true' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    concurrency:
+      group: agent-main-guard
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: write     # re-run the failed jobs once before reverting anything
+    uses: lorenzogirardi/ci-shared/.github/workflows/reusable_agent-main-guard.yml@v3
+    with:
+      run_id: ${{ github.event.workflow_run.id }}
+      base_branch: main
+      max_reverts: 3
+    secrets:
+      agent_push_token: ${{ secrets.AUTOFIX_PUSH_TOKEN }}

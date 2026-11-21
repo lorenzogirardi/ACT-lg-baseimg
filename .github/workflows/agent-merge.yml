@@ -1,0 +1,46 @@
+name: Agent Merge
+run-name: "Agent Merge · ${{ github.event_name }} · ${{ github.event.workflow_run.display_title || github.event.pull_request.title || github.ref_name }}"
+
+# Merge authority, with no way to miss it: it runs when a PR's CI succeeds, when main moves,
+# and every 30 minutes, and each run judges EVERY open pull request, the dependency bot's
+# included. Whichever finishes first, certification or CI, and whatever event is lost, the next
+# pass merges it. When PR Checks succeeds on a pull request, merge it if its
+# current head commit is certified by the agent pipeline (a comment by the
+# repository owner's agent account carrying the head sha), all required checks
+# succeeded on that commit, and the circuit breaker is closed. The same gate also
+# runs at the end of agent-change.yml / agent-ci-failure.yml, so it does not
+# matter whether certification or CI finishes first. Design: docs/13-agent-pipeline.md.
+
+on:
+  workflow_run:
+    workflows: ["PR Checks"]
+    types: [completed]
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17,47 * * * *'
+
+permissions: {}
+
+jobs:
+  merge:
+    if: >-
+      vars.AI_ENABLED == 'true' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'pull_request' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    concurrency:
+      group: agent-merge
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    uses: lorenzogirardi/ci-shared/.github/workflows/reusable_agent-merge.yml@v3
+    with:
+      # 0 = every open pull request: one pass judges them all, so no event can be missed.
+      pr_number: 0
+      base_branch: main
+      required_checks: 'lint,build,workflows'
+      max_reverts: 3
+    secrets:
+      agent_push_token: ${{ secrets.AUTOFIX_PUSH_TOKEN }}

@@ -1,0 +1,100 @@
+name: Build, scan, push one image
+description: >-
+  Builds one image for amd64 and loads it, scans it with Trivy (the gate), and only if the scan passes builds
+  it for amd64+arm64 and pushes it with SBOM and provenance. The caller has already set up Buildx and logged in
+  to the registries. A critical vulnerability with a fix available stops the job here: nothing is published,
+  so nothing built on top of this image starts either.
+
+inputs:
+  name:
+    description: Short name for the scan tag and the summary, e.g. lg-python
+    required: true
+  file:
+    required: true
+    description: Dockerfile path
+  target:
+    required: false
+    default: ''
+    description: Dockerfile target
+  build-args:
+    required: false
+    default: ''
+    description: Multiline KEY=value build args
+  tags:
+    required: true
+    description: Multiline list of tags to push
+  platforms:
+    required: false
+    default: linux/amd64,linux/arm64
+  push:
+    required: false
+    default: 'true'
+
+outputs:
+  digest:
+    description: Digest of the pushed multi-arch image index
+    value: ${{ steps.push.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build for scanning (amd64, not pushed)
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: ${{ inputs.file }}
+        target: ${{ inputs.target }}
+        build-args: ${{ inputs.build-args }}
+        platforms: linux/amd64
+        load: true
+        tags: scan/${{ inputs.name }}:ci
+        cache-from: type=gha,scope=${{ inputs.name }}
+        cache-to: type=gha,scope=${{ inputs.name }},mode=max
+
+    - name: Trivy gate (CRITICAL with a fix available blocks the publish)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        image-ref: scan/${{ inputs.name }}:ci
+        scanners: vuln
+        severity: CRITICAL
+        ignore-unfixed: true
+        exit-code: '1'
+        format: table
+
+    - name: Report what the scan found at every severity (awareness)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      if: always()
+      with:
+        image-ref: scan/${{ inputs.name }}:ci
+        scanners: vuln
+        severity: CRITICAL,HIGH,MEDIUM
+        format: table
+        output: trivy-${{ inputs.name }}.txt
+        exit-code: '0'
+
+    - name: Summary
+      if: always()
+      shell: bash
+      run: |
+        {
+          echo "### ${{ inputs.name }}"
+          echo '```'
+          tail -n 25 "trivy-${{ inputs.name }}.txt" 2>/dev/null || echo "no scan output"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Push (amd64 + arm64, SBOM, provenance)
+      id: push
+      if: inputs.push == 'true'
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: ${{ inputs.file }}
+        target: ${{ inputs.target }}
+        build-args: ${{ inputs.build-args }}
+        platforms: ${{ inputs.platforms }}
+        push: true
+        sbom: true
+        provenance: mode=max
+        tags: ${{ inputs.tags }}
+        cache-from: type=gha,scope=${{ inputs.name }}

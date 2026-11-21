@@ -1,0 +1,55 @@
+name: Agent CI Failure
+run-name: "Agent CI Failure · ${{ github.event_name }} · ${{ github.event.workflow_run.display_title || github.event.pull_request.title || github.ref_name }}"
+
+# When PR Checks fails on a pull request, the agent takes the failing checks'
+# own logs (including `integration`, which needs services the agent's job does
+# not have), decides for each failing test whether the CODE or the TEST is wrong
+# (tests are the specification: the test is changed only if the PR's own stated
+# intent explicitly redefines it), fixes accordingly and pushes to the PR branch.
+# It stops after 3 consecutive agent commits that still fail CI.
+# The dependency bot's pull requests are repaired here like any other. Design: docs/13-agent-pipeline.md.
+
+on:
+  workflow_run:
+    workflows: ["PR Checks"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  repair:
+    if: >-
+      vars.AI_ENABLED == 'true' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.pull_requests[0] != null
+    concurrency:
+      # Same group as agent-change.yml: one agent at a time on a pull request. When its checks fail this run
+      # takes over (it has the real logs, the integration suite included) and the review that started with
+      # the push is cancelled, instead of both repairing the same failure side by side.
+      group: agent-change-pr-${{ github.event.workflow_run.pull_requests[0].number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: write     # read failed checks' logs, and re-run a job that failed in the runner (mode ci)
+    uses: lorenzogirardi/ci-shared/.github/workflows/reusable_agent-change.yml@v3
+    with:
+      mode: ci
+      base_branch: main
+      required_checks: 'lint,build,workflows'
+      max_ci_attempts: 3
+      verify_command: |
+        set -euo pipefail
+        python -I scripts/versions.py
+        pip install -q pytest flake8
+        flake8 scripts tests --count --select=E9,F63,F7,F82 --show-source --statistics
+        pytest tests -q
+      openrouter_model: ${{ vars.OPENROUTER_MODEL }}
+      openrouter_endpoint: ${{ vars.OPENROUTER_ENDPOINT }}
+      openrouter_site_url: ${{ vars.OPENROUTER_SITE_URL }}
+      openrouter_app_name: ${{ vars.OPENROUTER_APP_NAME }}
+    secrets:
+      openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+      agent_push_token: ${{ secrets.AUTOFIX_PUSH_TOKEN }}

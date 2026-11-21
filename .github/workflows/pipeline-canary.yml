@@ -1,0 +1,42 @@
+name: Pipeline Canary
+run-name: "Pipeline Canary · ${{ github.event_name }}${{ github.event.client_payload.sha && format(' · candidate {0}', github.event.client_payload.sha) || '' }}"
+
+# Known changes through the real agent pipeline, every night, with the outcome checked. The scenarios are
+# in .github/canary.json and only touch app/canary.py, which nothing imports. Each one is a pull request
+# against a throwaway copy of main: it is reviewed, repaired and certified like any other, never merged,
+# then closed. Red means the agents did something other than what they should; the run summary says what.
+# Design: docs/13-agent-pipeline.md.
+
+on:
+  schedule:
+    - cron: '23 2 * * *'
+  # Sent by ci-shared before it moves its v3 tag: the scenarios are then judged by the engine about to be
+  # released (v3-next), and v3 moves only if they all hold. The run's title carries the candidate commit.
+  repository_dispatch:
+    types: [engine-candidate]
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Comma-separated scenario names; empty = all'
+        required: false
+        type: string
+        default: ''
+
+permissions: {}
+
+concurrency:
+  group: pipeline-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    if: vars.AI_ENABLED == 'true'
+    permissions:
+      contents: read
+      pull-requests: write   # open and close the canary pull requests
+    uses: lorenzogirardi/ci-shared/.github/workflows/reusable_pipeline-canary.yml@v3
+    with:
+      only: ${{ inputs.only || '' }}
+      candidate: ${{ github.event_name == 'repository_dispatch' }}
+    secrets:
+      agent_push_token: ${{ secrets.AUTOFIX_PUSH_TOKEN }}

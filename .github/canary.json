@@ -1,0 +1,50 @@
+{
+  "base": "main",
+  "timeout_minutes": 50,
+  "required_checks": [
+    "lint",
+    "build",
+    "workflows"
+  ],
+  "scenarios": [
+    {
+      "name": "change",
+      "title": "feat: add below_limit to the canary helper, and tidy the comparison",
+      "body": "New helper `below_limit(value)` in `app/canary.py`: true when `value` is strictly below `CANARY_LIMIT`, so the limit itself is not below the limit. The comparison in `within_limit` is tidied; its behaviour is unchanged.",
+      "edits": [
+        {
+          "file": "scripts/canary.py",
+          "find": "    return value <= CANARY_LIMIT\n",
+          "replace": "    return value < CANARY_LIMIT\n\n\ndef below_limit(value: int) -> bool:\n    \"\"\"True when `value` is strictly below the limit. The limit itself is not below it.\"\"\"\n    return value < CANARY_LIMIT\n"
+        }
+      ],
+      "expect": {
+        "verdict": "certified",
+        "agent_commit": true,
+        "allowed_paths": [
+          "scripts/canary.py",
+          "tests/"
+        ],
+        "changed": [
+          "tests/"
+        ],
+        "contains": [
+          {
+            "file": "scripts/canary.py",
+            "text": "return value <= CANARY_LIMIT"
+          },
+          {
+            "file": "scripts/canary.py",
+            "text": "def below_limit(value: int) -> bool:"
+          }
+        ],
+        "report_contains": [
+          "**code_defect**"
+        ],
+        "report_not_contains": [
+          "**test_defect**"
+        ]
+      }
+    }
+  ]
+}

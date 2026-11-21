@@ -1,0 +1,206 @@
+name: Images
+
+# Builds and publishes the images, in cascade order: lg-static and lg-base first, then lg-python, lg-node and
+# lg-go on top of the base that was just published (pinned by digest, never by :edge). Every image is scanned
+# before it is pushed; a failed scan publishes nothing and stops everything built on top.
+#
+# It runs when something in the images or versions.yaml changes, and every Sunday: the weekly run is the one
+# that matters, because it rebuilds from the current Debian packages, so a security fix in glibc or OpenSSL
+# reaches every runtime image with no change in this repository. Pinned versions (versions.yaml) never move
+# by themselves: they move by a pull request.
+# Design: docs/pipeline.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'images/**'
+      - 'versions.yaml'
+      - 'tests/go-hello/**'
+      - '.github/actions/build-scan-push/**'
+      - '.github/workflows/pipeline.yml'
+  schedule:
+    - cron: '0 3 * * 0'      # Sunday 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write     # ghcr.io mirror
+
+concurrency:
+  group: images
+  cancel-in-progress: false
+
+env:
+  DOCKERHUB: lgirardi
+  GHCR: ghcr.io/lorenzogirardi
+
+# Job names: Agent Main Guard reverts a merge only when one of the jobs named `build`, `docker`, `quality-gate` or
+# `k8s-check` failed (a change in this repository can cause those; a flaky scanner cannot). That list lives in
+# ci-shared, so the image jobs carry two of those names: `build` for the base layer, `docker` for the runtimes
+# on top of it. The job id (base, python, node, go) says which one in the log.
+jobs:
+  versions:
+    runs-on: ubuntu-latest
+    outputs:
+      debian_tag: ${{ steps.v.outputs.DEBIAN_TAG }}
+      python_version: ${{ steps.v.outputs.PYTHON_VERSION }}
+      python_minor: ${{ steps.v.outputs.PYTHON_MINOR }}
+      node_version: ${{ steps.v.outputs.NODE_VERSION }}
+      node_major: ${{ steps.v.outputs.NODE_MAJOR }}
+      go_version: ${{ steps.v.outputs.GO_VERSION }}
+      go_minor: ${{ steps.v.outputs.GO_MINOR }}
+      date: ${{ steps.date.outputs.date }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: v
+        run: scripts/versions.py | tee -a "$GITHUB_OUTPUT"
+      - id: date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
+  base:
+    name: build
+    needs: versions
+    runs-on: ubuntu-latest
+    outputs:
+      static_digest: ${{ steps.static.outputs.digest }}
+      base_digest: ${{ steps.base.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: static
+        uses: ./.github/actions/build-scan-push
+        with:
+          name: lg-static
+          file: images/base/Dockerfile
+          target: static
+          build-args: DEBIAN_TAG=${{ needs.versions.outputs.debian_tag }}
+          tags: |
+            ${{ env.DOCKERHUB }}/lg-static:edge
+            ${{ env.DOCKERHUB }}/lg-static:${{ needs.versions.outputs.date }}
+            ${{ env.GHCR }}/lg-static:edge
+            ${{ env.GHCR }}/lg-static:${{ needs.versions.outputs.date }}
+
+      - id: base
+        uses: ./.github/actions/build-scan-push
+        with:
+          name: lg-base
+          file: images/base/Dockerfile
+          target: base
+          build-args: DEBIAN_TAG=${{ needs.versions.outputs.debian_tag }}
+          tags: |
+            ${{ env.DOCKERHUB }}/lg-base:edge
+            ${{ env.DOCKERHUB }}/lg-base:${{ needs.versions.outputs.date }}
+            ${{ env.GHCR }}/lg-base:edge
+            ${{ env.GHCR }}/lg-base:${{ needs.versions.outputs.date }}
+
+  python:
+    name: docker
+    needs: [versions, base]
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.img.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: img
+        uses: ./.github/actions/build-scan-push
+        with:
+          name: lg-python
+          file: images/python/Dockerfile
+          build-args: |
+            BASE_IMAGE=${{ env.GHCR }}/lg-base@${{ needs.base.outputs.base_digest }}
+            PYTHON_VERSION=${{ needs.versions.outputs.python_version }}
+            DEBIAN_TAG=${{ needs.versions.outputs.debian_tag }}
+          tags: |
+            ${{ env.DOCKERHUB }}/lg-python:${{ needs.versions.outputs.python_minor }}
+            ${{ env.DOCKERHUB }}/lg-python:${{ needs.versions.outputs.python_version }}
+            ${{ env.DOCKERHUB }}/lg-python:${{ needs.versions.outputs.python_version }}-${{ needs.versions.outputs.date }}
+            ${{ env.GHCR }}/lg-python:${{ needs.versions.outputs.python_minor }}
+            ${{ env.GHCR }}/lg-python:${{ needs.versions.outputs.python_version }}
+            ${{ env.GHCR }}/lg-python:${{ needs.versions.outputs.python_version }}-${{ needs.versions.outputs.date }}
+
+  node:
+    name: docker
+    needs: [versions, base]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/build-scan-push
+        with:
+          name: lg-node
+          file: images/node/Dockerfile
+          build-args: |
+            BASE_IMAGE=${{ env.GHCR }}/lg-base@${{ needs.base.outputs.base_digest }}
+            NODE_VERSION=${{ needs.versions.outputs.node_version }}
+          tags: |
+            ${{ env.DOCKERHUB }}/lg-node:${{ needs.versions.outputs.node_major }}
+            ${{ env.DOCKERHUB }}/lg-node:${{ needs.versions.outputs.node_version }}
+            ${{ env.DOCKERHUB }}/lg-node:${{ needs.versions.outputs.node_version }}-${{ needs.versions.outputs.date }}
+            ${{ env.GHCR }}/lg-node:${{ needs.versions.outputs.node_major }}
+            ${{ env.GHCR }}/lg-node:${{ needs.versions.outputs.node_version }}
+            ${{ env.GHCR }}/lg-node:${{ needs.versions.outputs.node_version }}-${{ needs.versions.outputs.date }}
+
+  go:
+    name: docker
+    needs: [versions, base]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/build-scan-push
+        with:
+          name: lg-go
+          file: images/go/Dockerfile
+          build-args: |
+            GO_VERSION=${{ needs.versions.outputs.go_version }}
+            DEBIAN_TAG=${{ needs.versions.outputs.debian_tag }}
+          tags: |
+            ${{ env.DOCKERHUB }}/lg-go:${{ needs.versions.outputs.go_minor }}
+            ${{ env.DOCKERHUB }}/lg-go:${{ needs.versions.outputs.go_version }}
+            ${{ env.DOCKERHUB }}/lg-go:${{ needs.versions.outputs.go_version }}-${{ needs.versions.outputs.date }}
+            ${{ env.GHCR }}/lg-go:${{ needs.versions.outputs.go_minor }}
+            ${{ env.GHCR }}/lg-go:${{ needs.versions.outputs.go_version }}
+            ${{ env.GHCR }}/lg-go:${{ needs.versions.outputs.go_version }}-${{ needs.versions.outputs.date }}

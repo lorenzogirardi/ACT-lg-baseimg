@@ -1,0 +1,80 @@
+name: PR Checks
+
+# Deterministic pre-merge gate: the check auto-merge trusts, not an LLM reading a diff. Every pull request
+# builds ALL the images (base first, runtimes on top) with the same script a person runs locally
+# (scripts/build.sh) and runs the smoke tests against them (scripts/test-images.sh), so a version bump in
+# versions.yaml or a change to a Dockerfile is proven to produce images that start, before it merges.
+# Nothing is pushed from here. Publishing is pipeline.yml, on main and every Sunday.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - name: versions.yaml is well formed and complete
+        run: python scripts/versions.py
+      - name: Lint and unit tests
+        run: |
+          pip install flake8 pytest
+          flake8 scripts tests --count --select=E9,F63,F7,F82 --show-source --statistics
+          pytest tests -v
+      - name: Dockerfiles
+        uses: hadolint/hadolint-action@v3.3.0
+        with:
+          dockerfile: images/base/Dockerfile
+          failure-threshold: error
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build every image, in cascade order
+        run: scripts/build.sh
+      - name: Smoke tests
+        run: scripts/test-images.sh
+      # Awareness, never a gate: what the scan finds is a section of the run summary and evidence for the
+      # agents. The gate that blocks a publish is in .github/actions/build-scan-push.
+      - name: Scan the images (awareness)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: lg-python:local
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          format: table
+          output: trivy-python.txt
+          exit-code: '0'
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "### Image sizes"; echo '```'; docker images --format '{{.Repository}}:{{.Tag}}  {{.Size}}' | grep '^lg-'; echo '```'
+            echo "### lg-python, CRITICAL and HIGH"; echo '```'; tail -n 40 trivy-python.txt 2>/dev/null || true; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload evidence (trivy)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-context-trivy
+          path: trivy-python.txt
+          if-no-files-found: ignore
+
+  workflows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Lint workflow files
+        uses: raven-actions/actionlint@v2

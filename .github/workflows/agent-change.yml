@@ -1,0 +1,78 @@
+name: Agent Change
+
+# The agent pipeline on EVERY code change that already exists:
+#   - each pull request, the dependency bot's included: checks, the
+#     test steward, four reviewers (second developer, security, SRE, architect), one fix asked by
+#     the second developer and pushed to the PR branch, docs review. One comment on the PR.
+#   - each push straight to main with no PR: same review; if something blocks it
+#     opens a fix PR (never pushes to main), otherwise leaves a commit comment.
+# A certified PR whose CI is green is merged by agent-merge.yml (also at the end of this
+# run). It ignores its own commits (author "ci-shared agents"),
+# so it cannot loop. Design: docs/13-agent-pipeline.md.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  pull-request:
+    if: >-
+      github.event_name == 'pull_request' && vars.AI_ENABLED == 'true' &&
+      github.event.pull_request.head.repo.fork == false &&
+      github.event.pull_request.draft == false
+    concurrency:
+      group: agent-change-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: write     # read failed checks' logs, and re-run a job that failed in the runner (mode ci)
+    uses: lorenzogirardi/ci-shared/.github/workflows/reusable_agent-change.yml@v3
+    with:
+      mode: pr
+      base_branch: main
+      required_checks: 'lint,build,workflows'
+      verify_command: |
+        set -euo pipefail
+        python -I scripts/versions.py
+        pip install -q pytest flake8
+        flake8 scripts tests --count --select=E9,F63,F7,F82 --show-source --statistics
+        pytest tests -q
+      openrouter_model: ${{ vars.OPENROUTER_MODEL }}
+      openrouter_endpoint: ${{ vars.OPENROUTER_ENDPOINT }}
+      openrouter_site_url: ${{ vars.OPENROUTER_SITE_URL }}
+      openrouter_app_name: ${{ vars.OPENROUTER_APP_NAME }}
+    secrets:
+      openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+      agent_push_token: ${{ secrets.AUTOFIX_PUSH_TOKEN }}
+
+  direct-push:
+    if: github.event_name == 'push' && vars.AI_ENABLED == 'true'
+    concurrency:
+      group: agent-change-push
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: write     # read failed checks' logs, and re-run a job that failed in the runner (mode ci)
+    uses: lorenzogirardi/ci-shared/.github/workflows/reusable_agent-change.yml@v3
+    with:
+      mode: push
+      base_branch: main
+      verify_command: |
+        set -euo pipefail
+        python -I scripts/versions.py
+        pip install -q pytest flake8
+        flake8 scripts tests --count --select=E9,F63,F7,F82 --show-source --statistics
+        pytest tests -q
+      openrouter_model: ${{ vars.OPENROUTER_MODEL }}
+      openrouter_endpoint: ${{ vars.OPENROUTER_ENDPOINT }}
+      openrouter_site_url: ${{ vars.OPENROUTER_SITE_URL }}
+      openrouter_app_name: ${{ vars.OPENROUTER_APP_NAME }}
+    secrets:
+      openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+      agent_push_token: ${{ secrets.AUTOFIX_PUSH_TOKEN }}

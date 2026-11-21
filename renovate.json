@@ -1,0 +1,55 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "timezone": "Europe/Rome",
+  "schedule": ["before 6am on monday"],
+  "dependencyDashboard": true,
+  "prConcurrentLimit": 4,
+  "labels": ["dependencies"],
+  "enabledManagers": ["custom.regex", "github-actions", "dockerfile"],
+  "customManagers": [
+    {
+      "description": "Every pinned version in versions.yaml. The `# renovate:` comment above a line says where to look it up.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^versions\\.yaml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\n[a-z_]+: (?<currentValue>\\S+)"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Patch releases of Python, Node and Go: a pull request every Monday. The agent pipeline reviews it, builds every image on it, and merges it when all checks pass. Renovate itself merges nothing.",
+      "matchPackageNames": ["python", "node", "golang"],
+      "matchUpdateTypes": ["patch"],
+      "groupName": "runtime patch releases",
+      "automerge": false
+    },
+    {
+      "description": "A new minor or major of a runtime is a decision, not a routine bump: nothing is opened until it is approved on the Dependency Dashboard issue.",
+      "matchPackageNames": ["python", "node", "golang"],
+      "matchUpdateTypes": ["minor", "major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Node: even majors only (LTS). An odd release is never a production base.",
+      "matchPackageNames": ["node"],
+      "allowedVersions": "/^\\d*[02468]\\./"
+    },
+    {
+      "description": "The Debian snapshot the rootfs layers are cut from. Weekly rebuilds already pick up security updates; this moves the pinned snapshot forward.",
+      "matchPackageNames": ["debian"],
+      "groupName": "debian snapshot"
+    },
+    {
+      "description": "GitHub Actions: pinned by digest, one grouped pull request.",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    },
+    {
+      "description": "Dockerfile FROM lines that use build args are resolved from versions.yaml, not here.",
+      "matchManagers": ["dockerfile"],
+      "enabled": false
+    }
+  ]
+}

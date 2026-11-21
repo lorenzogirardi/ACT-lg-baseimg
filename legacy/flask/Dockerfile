@@ -5,8 +5,8 @@ LABEL layer=flask
 LABEL area=platform
 
 RUN apt-get update -y && apt-get install -y python3=3.11.2-1+b1 python3-pip && \
-    rm -rf /var/lib/apt/lists/* \
-    rm /usr/lib/python3.11/EXTERNALLY-MANAGED
+    rm -rf /var/lib/apt/lists/* && \
+    rm -f /usr/lib/python3.11/EXTERNALLY-MANAGED
 
 
 
